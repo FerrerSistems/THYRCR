@@ -61,7 +61,7 @@ function s($, id) {
 }
 
 // ════════════════════════════════════════════════════════════
-// PARSERS — solo IDs lbl* conocidos
+// PARSERS
 // ════════════════════════════════════════════════════════════
 
 function parsePersona(html) {
@@ -115,7 +115,6 @@ function parseMatrimonio(html) {
   };
 }
 
-// ── detalle_nacimiento.aspx — IDs del HTML proporcionado ─────────────────────
 function parseNacimiento(html) {
   const $ = cheerio.load(html);
   return {
@@ -134,6 +133,19 @@ function parseNacimiento(html) {
     madre_id:         s($, 'lblid_madre'),
     empadronado:      s($, 'lblempadronado'),
     fallecido:        s($, 'lblfallecido'),
+    marginal:         s($, 'lblLeyendaMarginal'),
+  };
+}
+
+// ── Parser para detalle_defuncion.aspx ───────────────────────────────────────
+function parseDefuncion(html) {
+  const $ = cheerio.load(html);
+  return {
+    cita:             s($, 'lblcita'),
+    fecha_defuncion:  s($, 'lblfecha_defuncion'),
+    nombre:           s($, 'lblnombre'),
+    conocido_como:    s($, 'lblconocido_como'),
+    lugar_suceso:     s($, 'lblLugar_suceso'),
     marginal:         s($, 'lblLeyendaMarginal'),
   };
 }
@@ -234,6 +246,57 @@ async function consultaTSE(cedula) {
   const persona = parsePersona(r3.data);
   if (!persona.nombre && !persona.cedula) throw new Error('Cédula no encontrada en el TSE');
 
+  // ── Detectar si la persona está registrada como fallecida ─────────────────
+  const esDefuncion = r3.data.includes('small;">Fecha de Defunci\u00f3n:</span>') ||
+                      r3.data.includes('Fecha de Defunci&oacute;n:') ||
+                      r3.data.includes('>Fecha de Defunción:<');
+
+  // Si es defunción, ejecutar flujo especial y retornar
+  if (esDefuncion) {
+    console.log(`[TSE] Defunción detectada — ejecutando flujo defuncion`);
+    let defuncion = null;
+    try {
+      // POST cmbdefuncion como __EVENTTARGET para activar el panel
+      const bdef = new URLSearchParams({
+        'ScriptManager1':        'UpdatePanel4|cmbdefuncion',
+        '__LASTFOCUS':           '',
+        '__EVENTTARGET':         'cmbdefuncion',
+        '__EVENTARGUMENT':       '',
+        '__VIEWSTATE':           vs.__VIEWSTATE,
+        '__VIEWSTATEGENERATOR':  vs.__VIEWSTATEGENERATOR,
+        '__EVENTVALIDATION':     vs.__EVENTVALIDATION,
+        'hdnCodigoAccionMarginal': '1',
+        'hdnFechaSucesoMatrimonio': '',
+        '__ASYNCPOST':           'true',
+      });
+      const rdef = await post(
+        `${BASE}/chc/resultado_persona.aspx`,
+        bdef,
+        makeClient(jar).hAsync(`${BASE}/chc/resultado_persona.aspx`)
+      );
+      jar = parseCookies(rdef.headers['set-cookie'], jar);
+
+      // GET detalle_defuncion
+      console.log(`[TSE] GET detalle_defuncion`);
+      const rdetdef = await get(
+        `${BASE}/chc/detalle_defuncion.aspx`,
+        makeClient(jar).h({ 'Referer': `${BASE}/chc/resultado_persona.aspx` })
+      );
+      defuncion = parseDefuncion(rdetdef.data);
+    } catch (e) {
+      console.log(`[TSE] ⚠️ defuncion detalle falló: ${e.message}`);
+    }
+
+    return {
+      persona,
+      defuncion,
+      nacimiento:  null,
+      votacion:    null,
+      hijos:       [],
+      matrimonios: { lista: [], detalle: null },
+    };
+  }
+
   // Helper para POST async desde resultado_persona
   const postRP = async (bodyParams) => {
     const body = new URLSearchParams({
@@ -277,7 +340,6 @@ async function consultaTSE(cedula) {
   const votacion = parseVotacion(r8.data);
 
   // ── P9: POST LinkButton11 → detalle_nacimiento propia persona ────────────
-  // Volver a resultado_persona con VS fresco
   console.log(`[TSE] P9 GET resultado_persona (refrescar para nacimiento)`);
   const r9a = await get(`${BASE}/chc/resultado_persona.aspx`,
     makeClient(jar).h({ 'Referer': `${BASE}/chc/detalle_votacion.aspx` }));
@@ -300,7 +362,6 @@ async function consultaTSE(cedula) {
       makeClient(jar).hAsync(`${BASE}/chc/resultado_persona.aspx`));
     jar = parseCookies(r9b.headers['set-cookie'], jar);
 
-    // GET detalle_nacimiento
     console.log(`[TSE] P9c GET detalle_nacimiento`);
     const r9c = await get(`${BASE}/chc/detalle_nacimiento.aspx`,
       makeClient(jar).h({ 'Referer': `${BASE}/chc/resultado_persona.aspx` }));
@@ -312,14 +373,12 @@ async function consultaTSE(cedula) {
   if (matrimoniosGrid.length > 0) {
     console.log(`[TSE] P10 detalle matrimonio`);
     try {
-      // Refrescar resultado_persona
       const r10a = await get(`${BASE}/chc/resultado_persona.aspx`,
         makeClient(jar).h({ 'Referer': `${BASE}/chc/detalle_nacimiento.aspx` }));
       jar = parseCookies(r10a.headers['set-cookie'], jar);
       const vs10 = extractVS(r10a.data);
 
       if (vs10.__VIEWSTATE) {
-        // Mostrar matrimonios
         const bm = new URLSearchParams({
           'ScriptManager1':'ctl09|btnMostrarMatrimonios',
           '__LASTFOCUS':'','__EVENTTARGET':'','__EVENTARGUMENT':'',
@@ -333,7 +392,6 @@ async function consultaTSE(cedula) {
         jar = parseCookies(rm.headers['set-cookie'], jar);
         const vsm = updateVSFromAsync(rm.data, { ...vs10 });
 
-        // Select$0 Gridmatrimonios
         const bs = new URLSearchParams({
           'ScriptManager1':'UpdatePanel2|Gridmatrimonios',
           '__LASTFOCUS':'','__EVENTTARGET':'Gridmatrimonios','__EVENTARGUMENT':'Select$0',
@@ -355,9 +413,9 @@ async function consultaTSE(cedula) {
     }
   }
 
-  // ── Resultado limpio ──────────────────────────────────────────────────────
   return {
     persona,
+    defuncion:   null,
     nacimiento,
     votacion,
     hijos,
