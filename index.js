@@ -251,23 +251,22 @@ async function consultaTSE(cedula) {
                       r3.data.includes('Fecha de Defunci&oacute;n:') ||
                       r3.data.includes('>Fecha de Defunción:<');
 
-  // Si es defunción, ejecutar flujo especial y retornar
+  // Si es defunción, obtener detalle pero continuar con el flujo completo
+  let defuncion = null;
   if (esDefuncion) {
-    console.log(`[TSE] Defunción detectada — ejecutando flujo defuncion`);
-    let defuncion = null;
+    console.log(`[TSE] Defunción detectada — obteniendo detalle defuncion`);
     try {
-      // POST cmbdefuncion como __EVENTTARGET para activar el panel
       const bdef = new URLSearchParams({
-        'ScriptManager1':        'UpdatePanel4|cmbdefuncion',
-        '__LASTFOCUS':           '',
-        '__EVENTTARGET':         'cmbdefuncion',
-        '__EVENTARGUMENT':       '',
-        '__VIEWSTATE':           vs.__VIEWSTATE,
-        '__VIEWSTATEGENERATOR':  vs.__VIEWSTATEGENERATOR,
-        '__EVENTVALIDATION':     vs.__EVENTVALIDATION,
+        'ScriptManager1':          'UpdatePanel4|cmbdefuncion',
+        '__LASTFOCUS':             '',
+        '__EVENTTARGET':           'cmbdefuncion',
+        '__EVENTARGUMENT':         '',
+        '__VIEWSTATE':             vs.__VIEWSTATE,
+        '__VIEWSTATEGENERATOR':    vs.__VIEWSTATEGENERATOR,
+        '__EVENTVALIDATION':       vs.__EVENTVALIDATION,
         'hdnCodigoAccionMarginal': '1',
         'hdnFechaSucesoMatrimonio': '',
-        '__ASYNCPOST':           'true',
+        '__ASYNCPOST':             'true',
       });
       const rdef = await post(
         `${BASE}/chc/resultado_persona.aspx`,
@@ -275,26 +274,26 @@ async function consultaTSE(cedula) {
         makeClient(jar).hAsync(`${BASE}/chc/resultado_persona.aspx`)
       );
       jar = parseCookies(rdef.headers['set-cookie'], jar);
+      vs  = updateVSFromAsync(rdef.data, vs);
 
-      // GET detalle_defuncion
       console.log(`[TSE] GET detalle_defuncion`);
       const rdetdef = await get(
         `${BASE}/chc/detalle_defuncion.aspx`,
         makeClient(jar).h({ 'Referer': `${BASE}/chc/resultado_persona.aspx` })
       );
       defuncion = parseDefuncion(rdetdef.data);
+
+      // Refrescar resultado_persona con VS actualizado para continuar flujo normal
+      console.log(`[TSE] Refrescar resultado_persona tras defuncion`);
+      const rref = await get(
+        `${BASE}/chc/resultado_persona.aspx`,
+        makeClient(jar).h({ 'Referer': `${BASE}/chc/detalle_defuncion.aspx` })
+      );
+      jar = parseCookies(rref.headers['set-cookie'], jar);
+      vs  = extractVS(rref.data);
     } catch (e) {
       console.log(`[TSE] ⚠️ defuncion detalle falló: ${e.message}`);
     }
-
-    return {
-      persona,
-      defuncion,
-      nacimiento:  null,
-      votacion:    null,
-      hijos:       [],
-      matrimonios: { lista: [], detalle: null },
-    };
   }
 
   // Helper para POST async desde resultado_persona
@@ -415,7 +414,7 @@ async function consultaTSE(cedula) {
 
   return {
     persona,
-    defuncion:   null,
+    defuncion,
     nacimiento,
     votacion,
     hijos,
