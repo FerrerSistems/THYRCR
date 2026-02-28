@@ -16,356 +16,356 @@ app.use((req, res, next) => {
 });
 
 // ════════════════════════════════════════════════════════════
-// HTTP CLIENT con cookies persistentes
+// HTTP HELPERS
 // ════════════════════════════════════════════════════════════
 
-const BASE_URL = 'https://servicioselectorales.tse.go.cr';
+const BASE = 'https://servicioselectorales.tse.go.cr';
 
-const HEADERS = {
-  'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'es-CR,es;q=0.9,en;q=0.8',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Connection':      'keep-alive',
-};
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-// Extraer cookies de response headers
-function parseCookies(setCookieHeaders, existing = {}) {
-  if (!setCookieHeaders) return existing;
-  const arr = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+function parseCookies(header, jar = {}) {
+  const arr = Array.isArray(header) ? header : header ? [header] : [];
   for (const c of arr) {
-    const part = c.split(';')[0];
-    const [name, ...rest] = part.split('=');
-    existing[name.trim()] = rest.join('=').trim();
+    const [pair] = c.split(';');
+    const idx = pair.indexOf('=');
+    if (idx > 0) jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
   }
-  return existing;
+  return jar;
 }
 
-function cookieString(cookies) {
-  return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+function cookieStr(jar) {
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
-// ════════════════════════════════════════════════════════════
-// EXTRAER VIEWSTATE + EVENTVALIDATION del HTML
-// ════════════════════════════════════════════════════════════
-
-function extractViewState(html) {
+function extractVS(html) {
   const $ = cheerio.load(html);
   return {
-    __VIEWSTATE:          $('#__VIEWSTATE').val()          || $('input[name="__VIEWSTATE"]').val()          || '',
-    __VIEWSTATEGENERATOR: $('#__VIEWSTATEGENERATOR').val() || $('input[name="__VIEWSTATEGENERATOR"]').val() || '',
-    __EVENTVALIDATION:    $('#__EVENTVALIDATION').val()    || $('input[name="__EVENTVALIDATION"]').val()    || '',
+    __VIEWSTATE:          $('input[name="__VIEWSTATE"]').val()          || '',
+    __VIEWSTATEGENERATOR: $('input[name="__VIEWSTATEGENERATOR"]').val() || '',
+    __EVENTVALIDATION:    $('input[name="__EVENTVALIDATION"]').val()    || '',
   };
 }
 
+function updateVSFromAsync(text, vs) {
+  const m1 = text.match(/\d+\|hiddenField\|__VIEWSTATE\|([^|]+)\|/);
+  const m2 = text.match(/\d+\|hiddenField\|__VIEWSTATEGENERATOR\|([^|]+)\|/);
+  const m3 = text.match(/\d+\|hiddenField\|__EVENTVALIDATION\|([^|]+)\|/);
+  if (m1) vs.__VIEWSTATE          = m1[1];
+  if (m2) vs.__VIEWSTATEGENERATOR = m2[1];
+  if (m3) vs.__EVENTVALIDATION    = m3[1];
+  return vs;
+}
+
+function spanById($, id) {
+  return $(`#${id}`).text().trim() || null;
+}
+
 // ════════════════════════════════════════════════════════════
-// EXTRAER DATOS DE SPANS del HTML
+// PARSERS POR IDs CONOCIDOS
 // ════════════════════════════════════════════════════════════
 
-function extractSpanData($) {
-  const data = {};
-  $('span').each((_, el) => {
-    const text = $(el).text().trim();
-    const id   = $(el).attr('id') || '';
-    if (text && text.length > 1 && !/^[\s\u00a0]+$/.test(text)) {
-      if (id) {
-        data[id] = text;
+function parsePersona(html) {
+  const $ = cheerio.load(html);
+  return {
+    cedula:        spanById($, 'lblcedula'),
+    nombre:        spanById($, 'lblnombrecompleto'),
+    fecha_nac:     spanById($, 'lblfechaNacimiento'),
+    edad:          spanById($, 'lbledad'),
+    nacionalidad:  spanById($, 'lblnacionalidad'),
+    estado_civil:  spanById($, 'lblestadocivil') || spanById($, 'lblEstadoCivil'),
+    marginal:      spanById($, 'lblLeyendaMarginal'),
+    padre_nombre:  spanById($, 'lblnombrepadre'),
+    padre_id:      spanById($, 'lblid_padre'),
+    madre_nombre:  spanById($, 'lblnombremadre'),
+    madre_id:      spanById($, 'lblid_madre'),
+    sexo:          spanById($, 'lblsexo') || spanById($, 'lblSexo'),
+  };
+}
+
+function parseVotacion(html) {
+  const $ = cheerio.load(html);
+  return {
+    provincia:             spanById($, 'lblprovincia'),
+    canton:                spanById($, 'lblcanton'),
+    distrito_admin:        spanById($, 'lbldistrito_administrativo'),
+    distrito_electoral:    spanById($, 'lbldistrito_electoral'),
+    centro_votacion:       spanById($, 'lblcentro_votacion'),
+    numero_junta:          spanById($, 'lblnumero_junta'),
+    numero_elector:        spanById($, 'lblnumero_elector'),
+    vencimiento_cedula:    spanById($, 'lblvencimiento_cedula'),
+    inscrito_canton_desde: spanById($, 'lblfecha_inscrito'),
+    inscrito_dist_desde:   spanById($, 'lblfecha_inscrito_distrito'),
+  };
+}
+
+function parseMatrimonio(html) {
+  const $ = cheerio.load(html);
+  return {
+    cita:              spanById($, 'lblcita'),
+    nombre_conyugue:   spanById($, 'lblnombreconyugue'),
+    nombre:            spanById($, 'lblnombre'),
+    padre_conyugue:    spanById($, 'lblpadreconyugue'),
+    padre:             spanById($, 'lblnombrepadre'),
+    madre_conyugue:    spanById($, 'lblmadreconyugue'),
+    madre:             spanById($, 'lblnombremadre'),
+    fecha_suceso:      spanById($, 'lblfechasuceso'),
+    lugar_suceso:      spanById($, 'lbllugarsuceso'),
+    tipo_relacion:     spanById($, 'lbltiporelacion'),
+    marginal:          spanById($, 'lblLeyendaMarginal'),
+    nota:              spanById($, 'lblNota') || null,
+  };
+}
+
+// Parsear tabla de hijos del bloque asyncpost
+function parseHijosGrid(html) {
+  const $ = cheerio.load(html);
+  const hijos = [];
+  // Gridhijos: columnas = Detalles | Cédula | Fecha Nac | Nombre
+  $('#Gridhijos tr, table tr').each((i, tr) => {
+    if (i === 0) return; // skip header
+    const cols = $(tr).find('td').map((_, td) => $(td).text().trim()).get();
+    if (cols.length >= 3) {
+      // quitar columna "Detalles" si está
+      const data = cols.filter(c => c && c !== 'Detalles');
+      if (data.length >= 2) {
+        hijos.push({
+          cedula:   data[0] || null,
+          fecha_nac:data[1] || null,
+          nombre:   data[2] || null,
+        });
       }
     }
   });
-  return data;
+  return hijos;
 }
 
-function extractTableData($, tableId) {
-  const rows = [];
-  const table = tableId ? $(`#${tableId}`) : $('table').first();
-  table.find('tr').each((_, tr) => {
-    const cells = [];
-    $(tr).find('td, th').each((_, td) => {
-      const text = $(td).text().replace(/\s+/g, ' ').trim();
-      if (text) cells.push(text);
-    });
-    if (cells.length > 0) rows.push(cells);
-  });
-  return rows;
-}
-
-// ════════════════════════════════════════════════════════════
-// PARSEAR RESPUESTA ASYNCPOST (formato especial de ASP.NET)
-// El response tiene formato: length|type|id|content|...
-// ════════════════════════════════════════════════════════════
-
-function parseAsyncPostResponse(text) {
-  // Extraer ViewState actualizado del response asyncpost
-  const vsMatch  = text.match(/__VIEWSTATE\|([^|]+)\|/);
-  const vsgMatch = text.match(/__VIEWSTATEGENERATOR\|([^|]+)\|/);
-  const evMatch  = text.match(/__EVENTVALIDATION\|([^|]+)\|/);
-
-  // Extraer bloques HTML del response
-  // Formato: longitudBloque|updatePanel|id|htmlContent|
-  const htmlBlocks = [];
-  const blockRegex = /\d+\|updatePanel\|[^|]+\|([\s\S]*?)(?=\d+\|(?:updatePanel|hiddenField|formAction|asyncPostBackControlIDs|pageTitle|focus|scriptBlock|expando|error|pageRedirect)|$)/g;
-  let m;
-  while ((m = blockRegex.exec(text)) !== null) {
-    if (m[1] && m[1].trim().length > 5) htmlBlocks.push(m[1]);
-  }
-
-  return {
-    viewState:          vsMatch  ? vsMatch[1]  : null,
-    viewStateGenerator: vsgMatch ? vsgMatch[1] : null,
-    eventValidation:    evMatch  ? evMatch[1]  : null,
-    htmlBlocks,
-    raw: text,
-  };
-}
-
-// ════════════════════════════════════════════════════════════
-// PARSEAR DATOS PERSONA del HTML resultado_persona
-// ════════════════════════════════════════════════════════════
-
-function parseDatosPersona(html) {
+// Parsear tabla de matrimonios del bloque asyncpost
+function parseMatrimoniosGrid(html) {
   const $ = cheerio.load(html);
-  const spans = extractSpanData($);
-
-  // Mapear IDs conocidos a nombres legibles
-  // (los IDs reales los descubrimos del HTML)
-  const resultado = {};
-
-  // Buscar todos los labels + spans adyacentes (patrón típico de WebForms)
-  $('td').each((_, td) => {
-    const label = $(td).find('label, span.etiqueta, b').first().text().trim();
-    const value = $(td).find('span:not(.etiqueta)').last().text().trim();
-    if (label && value && label !== value) {
-      const key = label.replace(/[:\s]+$/, '').trim();
-      resultado[key] = value;
+  const mat = [];
+  $('#Gridmatrimonios tr, table tr').each((i, tr) => {
+    if (i === 0) return;
+    const cols = $(tr).find('td').map((_, td) => $(td).text().trim()).get();
+    const data = cols.filter(c => c && c !== 'Detalles');
+    if (data.length >= 2) {
+      mat.push({
+        cita:         data[0] || null,
+        fecha:        data[1] || null,
+        tipo:         data[2] || null,
+      });
     }
   });
-
-  // También guardar todos los spans con ID directamente
-  for (const [id, val] of Object.entries(spans)) {
-    if (!id.includes('ScriptManager') && !id.includes('Update')) {
-      resultado[id] = val;
-    }
-  }
-
-  // Extraer tabla de matrimonios si existe
-  const matrimonios = extractTableData($, 'Gridmatrimonios');
-  if (matrimonios.length > 0) resultado.matrimonios = matrimonios;
-
-  // Extraer tabla de hijos si existe
-  const hijos = extractTableData($, 'Gridhijos');
-  if (hijos.length > 0) resultado.hijos = hijos;
-
-  // Extraer tabla de votación si existe
-  const votacion = extractTableData($, 'Gridvotacion');
-  if (votacion.length > 0) resultado.votacion = votacion;
-
-  return resultado;
+  return mat;
 }
 
 // ════════════════════════════════════════════════════════════
-// PARSEAR DATOS VOTACIÓN del detalle_votacion
-// ════════════════════════════════════════════════════════════
-
-function parseDatosVotacion(html) {
-  const $      = cheerio.load(html);
-  const spans  = extractSpanData($);
-  const tables = [];
-
-  $('table').each((_, table) => {
-    const rows = extractTableData($, $(table).attr('id'));
-    if (rows.length > 0) tables.push(rows);
-  });
-
-  return { spans, tables };
-}
-
-// ════════════════════════════════════════════════════════════
-// FLUJO COMPLETO DE CONSULTA
+// FLUJO COMPLETO
 // ════════════════════════════════════════════════════════════
 
 async function consultaTSE(cedula) {
-  let cookies = {};
-  let vs      = {};
+  let jar = {};
+  let vs  = {};
 
-  // ── PASO 1: GET página inicial — obtener ViewState y cookies ──────────────
-  console.log(`[TSE] PASO 1: GET consulta_cedula cedula=${cedula}`);
-  const resp1 = await axios.get(`${BASE_URL}/chc/consulta_cedula.aspx`, {
-    headers:          { ...HEADERS },
-    timeout:          20000,
-    validateStatus:   s => s < 500,
+  const headers = (extra = {}) => ({
+    'User-Agent':      UA,
+    'Accept':          'text/html,application/xhtml+xml,*/*;q=0.8',
+    'Accept-Language': 'es-CR,es;q=0.9',
+    'Cookie':          cookieStr(jar),
+    ...extra,
   });
 
-  cookies = parseCookies(resp1.headers['set-cookie'], cookies);
-  vs      = extractViewState(resp1.data);
-  console.log(`[TSE] PASO 1: cookies=${Object.keys(cookies)} vs=${!!vs.__VIEWSTATE}`);
+  const headersAsync = (referer) => headers({
+    'Content-Type':    'application/x-www-form-urlencoded; charset=UTF-8',
+    'X-MicrosoftAjax': 'Delta=true',
+    'X-Requested-With':'XMLHttpRequest',
+    'Referer':         referer,
+  });
 
-  if (!vs.__VIEWSTATE) throw new Error('No se pudo obtener ViewState inicial');
+  // ── PASO 1: GET consulta_cedula → ViewState inicial ──────────────────────
+  console.log(`[TSE] P1 GET consulta_cedula`);
+  const r1 = await axios.get(`${BASE}/chc/consulta_cedula.aspx`, { headers: headers(), timeout: 20000, validateStatus: s => s < 500 });
+  jar = parseCookies(r1.headers['set-cookie'], jar);
+  vs  = extractVS(r1.data);
+  if (!vs.__VIEWSTATE) throw new Error('No se obtuvo ViewState inicial');
 
-  // ── PASO 2: POST consulta con cédula ─────────────────────────────────────
-  console.log(`[TSE] PASO 2: POST consulta cedula`);
-
+  // ── PASO 2: POST cédula → redirige a resultado_persona ──────────────────
+  console.log(`[TSE] P2 POST cedula=${cedula}`);
   const body2 = new URLSearchParams({
-    'ScriptManager1':      'UpdatePanel1|btnConsultaCedula',
-    '__LASTFOCUS':         '',
-    '__EVENTTARGET':       '',
-    '__EVENTARGUMENT':     '',
-    '__VIEWSTATE':          vs.__VIEWSTATE,
+    'ScriptManager1': 'UpdatePanel1|btnConsultaCedula',
+    '__LASTFOCUS': '', '__EVENTTARGET': '', '__EVENTARGUMENT': '',
+    '__VIEWSTATE': vs.__VIEWSTATE,
     '__VIEWSTATEGENERATOR': vs.__VIEWSTATEGENERATOR,
-    '__EVENTVALIDATION':    vs.__EVENTVALIDATION,
-    'txtcedula':            cedula,
-    'grupo':                '',
-    'comentario':           '',
-    '__ASYNCPOST':          'true',
-    'btnConsultaCedula':    'Consultar',
+    '__EVENTVALIDATION': vs.__EVENTVALIDATION,
+    'txtcedula': cedula, 'grupo': '', 'comentario': '',
+    '__ASYNCPOST': 'true', 'btnConsultaCedula': 'Consultar',
   });
-
-  const resp2 = await axios.post(`${BASE_URL}/chc/consulta_cedula.aspx`, body2.toString(), {
-    headers: {
-      ...HEADERS,
-      'Content-Type':    'application/x-www-form-urlencoded; charset=UTF-8',
-      'X-MicrosoftAjax': 'Delta=true',
-      'X-Requested-With':'XMLHttpRequest',
-      'Referer':         `${BASE_URL}/chc/consulta_cedula.aspx`,
-      'Cookie':          cookieString(cookies),
-    },
-    timeout:        20000,
-    validateStatus: s => s < 500,
+  const r2 = await axios.post(`${BASE}/chc/consulta_cedula.aspx`, body2.toString(), {
+    headers: headersAsync(`${BASE}/chc/consulta_cedula.aspx`),
+    timeout: 20000, validateStatus: s => s < 500,
   });
+  jar = parseCookies(r2.headers['set-cookie'], jar);
+  vs  = updateVSFromAsync(r2.data, vs);
 
-  cookies = parseCookies(resp2.headers['set-cookie'], cookies);
-  const parsed2 = parseAsyncPostResponse(resp2.data);
-  console.log(`[TSE] PASO 2: blocks=${parsed2.htmlBlocks.length} redirect=${resp2.data.includes('resultado_persona')}`);
-
-  // Actualizar ViewState si viene en el asyncpost response
-  if (parsed2.viewState)          vs.__VIEWSTATE          = parsed2.viewState;
-  if (parsed2.viewStateGenerator) vs.__VIEWSTATEGENERATOR = parsed2.viewStateGenerator;
-  if (parsed2.eventValidation)    vs.__EVENTVALIDATION    = parsed2.eventValidation;
-
-  // ── PASO 3: GET resultado_persona ─────────────────────────────────────────
-  console.log(`[TSE] PASO 3: GET resultado_persona`);
-  const resp3 = await axios.get(`${BASE_URL}/chc/resultado_persona.aspx`, {
-    headers: {
-      ...HEADERS,
-      'Referer': `${BASE_URL}/chc/consulta_cedula.aspx`,
-      'Cookie':  cookieString(cookies),
-    },
-    timeout:        20000,
-    validateStatus: s => s < 500,
+  // ── PASO 3: GET resultado_persona → datos persona + ViewState ────────────
+  console.log(`[TSE] P3 GET resultado_persona`);
+  const r3 = await axios.get(`${BASE}/chc/resultado_persona.aspx`, {
+    headers: headers({ 'Referer': `${BASE}/chc/consulta_cedula.aspx` }),
+    timeout: 20000, validateStatus: s => s < 500,
   });
+  jar = parseCookies(r3.headers['set-cookie'], jar);
+  vs  = extractVS(r3.data);
+  if (!vs.__VIEWSTATE) throw new Error('No se obtuvo ViewState de resultado_persona');
 
-  cookies = parseCookies(resp3.headers['set-cookie'], cookies);
-  vs      = extractViewState(resp3.data);
-  console.log(`[TSE] PASO 3: status=${resp3.status} vs=${!!vs.__VIEWSTATE}`);
+  const persona = parsePersona(r3.data);
+  if (!persona.nombre && !persona.cedula) throw new Error('Cédula no encontrada');
 
-  if (!vs.__VIEWSTATE) throw new Error('No se pudo obtener ViewState de resultado_persona');
-
-  // Parsear datos persona del HTML
-  const datosPersona = parseDatosPersona(resp3.data);
-  console.log(`[TSE] PASO 3: datosPersona keys=${Object.keys(datosPersona).length}`);
-
-  // ── PASO 4: POST mostrar votacion ─────────────────────────────────────────
-  console.log(`[TSE] PASO 4: POST mostrar votacion`);
-
+  // ── PASO 4: POST mostrar hijos ───────────────────────────────────────────
+  console.log(`[TSE] P4 POST mostrar hijos`);
   const body4 = new URLSearchParams({
-    'ScriptManager1':         'ctl11|btnMostrarVotacion',
-    '__LASTFOCUS':            '',
-    '__EVENTTARGET':          '',
-    '__EVENTARGUMENT':        '',
-    '__VIEWSTATE':             vs.__VIEWSTATE,
-    '__VIEWSTATEGENERATOR':    vs.__VIEWSTATEGENERATOR,
-    '__EVENTVALIDATION':       vs.__EVENTVALIDATION,
-    'hdnCodigoAccionMarginal': '1',
-    'hdnFechaSucesoMatrimonio':'',
-    '__ASYNCPOST':             'true',
-    'btnMostrarVotacion':      'Mostrar',
+    'ScriptManager1': 'ctl07|btnMostrarNacimiento',
+    '__LASTFOCUS': '', '__EVENTTARGET': '', '__EVENTARGUMENT': '',
+    '__VIEWSTATE': vs.__VIEWSTATE,
+    '__VIEWSTATEGENERATOR': vs.__VIEWSTATEGENERATOR,
+    '__EVENTVALIDATION': vs.__EVENTVALIDATION,
+    'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+    '__ASYNCPOST': 'true', 'btnMostrarNacimiento': 'Mostrar',
   });
-
-  const resp4 = await axios.post(`${BASE_URL}/chc/resultado_persona.aspx`, body4.toString(), {
-    headers: {
-      ...HEADERS,
-      'Content-Type':    'application/x-www-form-urlencoded; charset=UTF-8',
-      'X-MicrosoftAjax': 'Delta=true',
-      'X-Requested-With':'XMLHttpRequest',
-      'Referer':         `${BASE_URL}/chc/resultado_persona.aspx`,
-      'Cookie':          cookieString(cookies),
-    },
-    timeout:        20000,
-    validateStatus: s => s < 500,
+  const r4 = await axios.post(`${BASE}/chc/resultado_persona.aspx`, body4.toString(), {
+    headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+    timeout: 20000, validateStatus: s => s < 500,
   });
+  jar = parseCookies(r4.headers['set-cookie'], jar);
+  vs  = updateVSFromAsync(r4.data, vs);
+  const hijos = parseHijosGrid(r4.data);
 
-  cookies = parseCookies(resp4.headers['set-cookie'], cookies);
-  const parsed4 = parseAsyncPostResponse(resp4.data);
-  console.log(`[TSE] PASO 4: blocks=${parsed4.htmlBlocks.length}`);
+  // ── PASO 5: POST mostrar matrimonios ─────────────────────────────────────
+  console.log(`[TSE] P5 POST mostrar matrimonios`);
+  const body5 = new URLSearchParams({
+    'ScriptManager1': 'ctl09|btnMostrarMatrimonios',
+    'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+    '__LASTFOCUS': '', '__EVENTTARGET': '', '__EVENTARGUMENT': '',
+    '__VIEWSTATE': vs.__VIEWSTATE,
+    '__VIEWSTATEGENERATOR': vs.__VIEWSTATEGENERATOR,
+    '__EVENTVALIDATION': vs.__EVENTVALIDATION,
+    '__ASYNCPOST': 'true', 'btnMostrarMatrimonios': 'Mostrar',
+  });
+  const r5 = await axios.post(`${BASE}/chc/resultado_persona.aspx`, body5.toString(), {
+    headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+    timeout: 20000, validateStatus: s => s < 500,
+  });
+  jar = parseCookies(r5.headers['set-cookie'], jar);
+  vs  = updateVSFromAsync(r5.data, vs);
+  const matrimoniosGrid = parseMatrimoniosGrid(r5.data);
 
-  if (parsed4.viewState)          vs.__VIEWSTATE          = parsed4.viewState;
-  if (parsed4.viewStateGenerator) vs.__VIEWSTATEGENERATOR = parsed4.viewStateGenerator;
-  if (parsed4.eventValidation)    vs.__EVENTVALIDATION    = parsed4.eventValidation;
+  // ── PASO 6: POST mostrar votación ─────────────────────────────────────────
+  console.log(`[TSE] P6 POST mostrar votacion`);
+  const body6 = new URLSearchParams({
+    'ScriptManager1': 'ctl11|btnMostrarVotacion',
+    '__LASTFOCUS': '', '__EVENTTARGET': '', '__EVENTARGUMENT': '',
+    '__VIEWSTATE': vs.__VIEWSTATE,
+    '__VIEWSTATEGENERATOR': vs.__VIEWSTATEGENERATOR,
+    '__EVENTVALIDATION': vs.__EVENTVALIDATION,
+    'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+    '__ASYNCPOST': 'true', 'btnMostrarVotacion': 'Mostrar',
+  });
+  const r6 = await axios.post(`${BASE}/chc/resultado_persona.aspx`, body6.toString(), {
+    headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+    timeout: 20000, validateStatus: s => s < 500,
+  });
+  jar = parseCookies(r6.headers['set-cookie'], jar);
+  vs  = updateVSFromAsync(r6.data, vs);
 
-  // Parsear datos de votación del bloque HTML del asyncpost
-  let datosVotacionGrid = [];
-  for (const block of parsed4.htmlBlocks) {
-    const $b = cheerio.load(block);
-    const rows = extractTableData($b);
-    if (rows.length > 0) datosVotacionGrid.push(...rows);
+  // ── PASO 7: POST Select$0 en Gridvotacion ─────────────────────────────────
+  console.log(`[TSE] P7 POST select votacion`);
+  const body7 = new URLSearchParams({
+    'ScriptManager1': 'UpdatePanel3|Gridvotacion',
+    'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+    '__LASTFOCUS': '', '__EVENTTARGET': 'Gridvotacion', '__EVENTARGUMENT': 'Select$0',
+    '__VIEWSTATE': vs.__VIEWSTATE,
+    '__VIEWSTATEGENERATOR': vs.__VIEWSTATEGENERATOR,
+    '__EVENTVALIDATION': vs.__EVENTVALIDATION,
+    '__ASYNCPOST': 'true',
+  });
+  const r7 = await axios.post(`${BASE}/chc/resultado_persona.aspx`, body7.toString(), {
+    headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+    timeout: 20000, validateStatus: s => s < 500,
+  });
+  jar = parseCookies(r7.headers['set-cookie'], jar);
+
+  // ── PASO 8: GET detalle_votacion ──────────────────────────────────────────
+  console.log(`[TSE] P8 GET detalle_votacion`);
+  const r8 = await axios.get(`${BASE}/chc/detalle_votacion.aspx`, {
+    headers: headers({ 'Referer': `${BASE}/chc/resultado_persona.aspx` }),
+    timeout: 20000, validateStatus: s => s < 500,
+  });
+  const votacion = parseVotacion(r8.data);
+
+  // ── PASO 9: POST Select$0 en Gridmatrimonios → detalle matrimonio ─────────
+  let matrimonioDetalle = null;
+  if (matrimoniosGrid.length > 0) {
+    console.log(`[TSE] P9 POST select matrimonio`);
+
+    // Necesitamos el VS fresco de resultado_persona (antes del select)
+    // Volvemos a cargar resultado_persona para obtener VS actualizado
+    const r9a = await axios.get(`${BASE}/chc/resultado_persona.aspx`, {
+      headers: headers({ 'Referer': `${BASE}/chc/detalle_votacion.aspx` }),
+      timeout: 20000, validateStatus: s => s < 500,
+    });
+    jar = parseCookies(r9a.headers['set-cookie'], jar);
+    const vs9 = extractVS(r9a.data);
+
+    if (vs9.__VIEWSTATE) {
+      // Re-cargar hijos y matrimonios para tener VS correcto con tablas visibles
+      // POST matrimonios
+      const bodyM = new URLSearchParams({
+        'ScriptManager1': 'ctl09|btnMostrarMatrimonios',
+        'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+        '__LASTFOCUS': '', '__EVENTTARGET': '', '__EVENTARGUMENT': '',
+        '__VIEWSTATE': vs9.__VIEWSTATE,
+        '__VIEWSTATEGENERATOR': vs9.__VIEWSTATEGENERATOR,
+        '__EVENTVALIDATION': vs9.__EVENTVALIDATION,
+        '__ASYNCPOST': 'true', 'btnMostrarMatrimonios': 'Mostrar',
+      });
+      const rM = await axios.post(`${BASE}/chc/resultado_persona.aspx`, bodyM.toString(), {
+        headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+        timeout: 20000, validateStatus: s => s < 500,
+      });
+      jar = parseCookies(rM.headers['set-cookie'], jar);
+      const vsM = updateVSFromAsync(rM.data, { ...vs9 });
+
+      // POST Select$0 Gridmatrimonios
+      const bodyS = new URLSearchParams({
+        'ScriptManager1': 'UpdatePanel2|Gridmatrimonios',
+        'hdnCodigoAccionMarginal': '1', 'hdnFechaSucesoMatrimonio': '',
+        '__LASTFOCUS': '', '__EVENTTARGET': 'Gridmatrimonios', '__EVENTARGUMENT': 'Select$0',
+        '__VIEWSTATE': vsM.__VIEWSTATE,
+        '__VIEWSTATEGENERATOR': vsM.__VIEWSTATEGENERATOR,
+        '__EVENTVALIDATION': vsM.__EVENTVALIDATION,
+        '__ASYNCPOST': 'true',
+      });
+      const rS = await axios.post(`${BASE}/chc/resultado_persona.aspx`, bodyS.toString(), {
+        headers: headersAsync(`${BASE}/chc/resultado_persona.aspx`),
+        timeout: 20000, validateStatus: s => s < 500,
+      });
+      jar = parseCookies(rS.headers['set-cookie'], jar);
+
+      // GET detalle matrimonio
+      const r9b = await axios.get(`${BASE}/chc/detalle_matrimonio_extranjero.aspx`, {
+        headers: headers({ 'Referer': `${BASE}/chc/resultado_persona.aspx` }),
+        timeout: 20000, validateStatus: s => s < 500,
+      });
+      matrimonioDetalle = parseMatrimonio(r9b.data);
+    }
   }
 
-  // ── PASO 5: POST abrir detalle votacion (Select$0) ────────────────────────
-  console.log(`[TSE] PASO 5: POST abrir detalle votacion`);
-
-  const body5 = new URLSearchParams({
-    'ScriptManager1':         'UpdatePanel3|Gridvotacion',
-    'hdnCodigoAccionMarginal': '1',
-    'hdnFechaSucesoMatrimonio':'',
-    '__LASTFOCUS':            '',
-    '__EVENTTARGET':          'Gridvotacion',
-    '__EVENTARGUMENT':        'Select$0',
-    '__VIEWSTATE':             vs.__VIEWSTATE,
-    '__VIEWSTATEGENERATOR':    vs.__VIEWSTATEGENERATOR,
-    '__EVENTVALIDATION':       vs.__EVENTVALIDATION,
-    '__ASYNCPOST':             'true',
-  });
-
-  const resp5 = await axios.post(`${BASE_URL}/chc/resultado_persona.aspx`, body5.toString(), {
-    headers: {
-      ...HEADERS,
-      'Content-Type':    'application/x-www-form-urlencoded; charset=UTF-8',
-      'X-MicrosoftAjax': 'Delta=true',
-      'X-Requested-With':'XMLHttpRequest',
-      'Referer':         `${BASE_URL}/chc/resultado_persona.aspx`,
-      'Cookie':          cookieString(cookies),
-    },
-    timeout:        20000,
-    validateStatus: s => s < 500,
-    maxRedirects:   5,
-  });
-
-  cookies = parseCookies(resp5.headers['set-cookie'], cookies);
-  console.log(`[TSE] PASO 5: status=${resp5.status}`);
-
-  // ── PASO 6: GET detalle_votacion ──────────────────────────────────────────
-  console.log(`[TSE] PASO 6: GET detalle_votacion`);
-  const resp6 = await axios.get(`${BASE_URL}/chc/detalle_votacion.aspx`, {
-    headers: {
-      ...HEADERS,
-      'Referer': `${BASE_URL}/chc/resultado_persona.aspx`,
-      'Cookie':  cookieString(cookies),
-    },
-    timeout:        20000,
-    validateStatus: s => s < 500,
-  });
-
-  console.log(`[TSE] PASO 6: status=${resp6.status}`);
-  const datosVotacion = parseDatosVotacion(resp6.data);
-
-  // ── Consolidar resultado ──────────────────────────────────────────────────
+  // ── Resultado limpio ──────────────────────────────────────────────────────
   return {
-    cedula,
-    persona:         datosPersona,
-    votacion_grid:   datosVotacionGrid,
-    votacion_detalle: {
-      spans:  datosVotacion.spans,
-      tablas: datosVotacion.tables,
+    persona,
+    votacion,
+    hijos,
+    matrimonios: {
+      lista:   matrimoniosGrid,
+      detalle: matrimonioDetalle,
     },
   };
 }
@@ -375,44 +375,28 @@ async function consultaTSE(cedula) {
 // ════════════════════════════════════════════════════════════
 
 app.get('/', (req, res) => {
-  res.json({
-    estado: true,
-    mensaje: 'TSE Costa Rica API online',
-    uso: [
-      'GET /api/tse/:cedula',
-      'GET /api/tse/:cedula?apikey=KEY (si tienes API_KEY)',
-    ],
-  });
+  res.json({ estado: true, mensaje: 'TSE Costa Rica API', uso: '/api/tse/:cedula' });
 });
 
 app.get('/api/tse/:cedula', async (req, res) => {
   const { cedula } = req.params;
-
   if (!/^\d{9,12}$/.test(cedula)) {
-    return res.json({ estado: false, mensaje: 'Cédula inválida. Debe tener entre 9 y 12 dígitos.' });
+    return res.json({ estado: false, mensaje: 'Cédula inválida. Entre 9 y 12 dígitos.' });
   }
 
-  console.log(`\n[API] GET /api/tse/${cedula}`);
-  const start = Date.now();
+  console.log(`\n[API] /api/tse/${cedula}`);
+  const t = Date.now();
 
   try {
     const datos = await consultaTSE(cedula);
-    res.json({
-      estado:    true,
-      tiempo_ms: Date.now() - start,
-      cedula,
-      ...datos,
-    });
-  } catch (err) {
-    console.error('[API] ❌', err.message);
-    res.status(500).json({
-      estado:  false,
-      mensaje: 'Error interno: ' + err.message,
-    });
+    res.json({ estado: true, tiempo_ms: Date.now() - t, cedula, ...datos });
+  } catch (e) {
+    console.error('[API] ❌', e.message);
+    res.status(500).json({ estado: false, mensaje: e.message });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 TSE API corriendo en puerto ${PORT}`);
-  console.log(`   http://localhost:${PORT}/api/tse/115260363`);
+  console.log(`🚀 TSE API en puerto ${PORT}`);
+  console.log(`   Prueba: http://localhost:${PORT}/api/tse/115260363`);
 });
